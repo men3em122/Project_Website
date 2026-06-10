@@ -1,0 +1,119 @@
+'use client';
+
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { api } from '@/lib/api';
+import { AnnotatedImage } from '@/types';
+import { categoryKeys } from './useCategories';
+
+interface ImagesResponse {
+  images: AnnotatedImage[];
+}
+
+interface ImageResponse {
+  image: AnnotatedImage;
+}
+
+export const imageKeys = {
+  byCategory: (categoryId: string) => ['images', categoryId] as const,
+  single: (imageId: string) => ['image', imageId] as const,
+};
+
+// ─── Images for a category ────────────────────────────────────────────────────
+export function useCategoryImages(categoryId: string | undefined) {
+  return useQuery<AnnotatedImage[]>({
+    queryKey: imageKeys.byCategory(categoryId ?? ''),
+    queryFn: async () => {
+      const { data } = await api.get<ImagesResponse>(`/categories/${categoryId}/images`);
+      return data.images;
+    },
+    enabled: !!categoryId,
+    staleTime: 30 * 1000,
+  });
+}
+
+// ─── Single image ─────────────────────────────────────────────────────────────
+export function useImage(imageId: string | undefined) {
+  return useQuery<AnnotatedImage | null>({
+    queryKey: imageKeys.single(imageId ?? ''),
+    queryFn: async () => {
+      const { data } = await api.get<ImageResponse>(`/images/${imageId}`);
+      return data.image;
+    },
+    enabled: !!imageId,
+    staleTime: 60 * 1000,
+  });
+}
+
+// ─── Save annotated image to a category ───────────────────────────────────────
+// Sends multipart/form-data:
+//   image     – Blob  (for freshly uploaded images from the user's device)
+//   imageUrl  – string (for re-annotated images already hosted on Cloudinary)
+export function useAddImage() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (payload: {
+      categoryId: string;
+      name: string;
+      /** Raw file blob — provided when the image was just uploaded from disk */
+      imageFile?: Blob;
+      /** Cloudinary URL — provided when re-annotating an existing image */
+      existingImageUrl?: string;
+      width: number;
+      height: number;
+      annotations: AnnotatedImage['annotations'];
+    }) => {
+      const { categoryId, name, imageFile, existingImageUrl, width, height, annotations } = payload;
+
+      const formData = new FormData();
+
+      if (imageFile) {
+        // Give the blob a filename; use the image name with a fallback extension
+        const ext = imageFile.type.split('/')[1] ?? 'jpg';
+        const filename = name.endsWith(`.${ext}`) ? name : `${name}.${ext}`;
+        formData.append('image', imageFile, filename);
+      } else if (existingImageUrl) {
+        formData.append('imageUrl', existingImageUrl);
+      }
+
+      formData.append('name', name);
+      formData.append('width', String(width));
+      formData.append('height', String(height));
+      formData.append('annotations', JSON.stringify(annotations));
+
+      const { data } = await api.post<ImageResponse>(
+        `/categories/${categoryId}/images`,
+        formData,
+        { headers: { 'Content-Type': 'multipart/form-data' } }
+      );
+
+      return { image: data.image, categoryId };
+    },
+    onSuccess: ({ image, categoryId }) => {
+      queryClient.setQueryData<AnnotatedImage[]>(imageKeys.byCategory(categoryId), (old = []) => [
+        image,
+        ...old,
+      ]);
+      // Refresh category thumbnails / counts
+      queryClient.invalidateQueries({ queryKey: categoryKeys.all });
+    },
+  });
+}
+
+// ─── Delete an image ──────────────────────────────────────────────────────────
+export function useDeleteImage(categoryId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (imageId: string) => {
+      await api.delete(`/images/${imageId}`);
+      return imageId;
+    },
+    onSuccess: (deletedId) => {
+      queryClient.setQueryData<AnnotatedImage[]>(imageKeys.byCategory(categoryId), (old = []) =>
+        old.filter((img) => img.id !== deletedId)
+      );
+      queryClient.invalidateQueries({ queryKey: categoryKeys.all });
+    },
+  });
+}
