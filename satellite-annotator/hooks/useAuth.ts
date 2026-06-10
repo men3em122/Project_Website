@@ -1,7 +1,7 @@
 'use client';
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api, setToken, removeToken } from '@/lib/api';
+import { api, setToken, removeToken, getToken } from '@/lib/api';
 import { User } from '@/types';
 
 interface AuthResponse {
@@ -30,6 +30,7 @@ export function useCurrentUser() {
         return null;
       }
     },
+    enabled: !!getToken(),
     staleTime: 5 * 60 * 1000,
     retry: false,
   });

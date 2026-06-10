@@ -56,12 +56,13 @@ router.post(
       throw new AppError('Category not found', 404);
     }
 
-    const { name, width, height, annotations, imageUrl } = req.body as {
+    const { name, width, height, annotations, imageUrl, imagePublicId } = req.body as {
       name?: string;
       width?: string;
       height?: string;
       annotations?: string;
       imageUrl?: string;
+      imagePublicId?: string;
     };
 
     if (!name?.trim()) {
@@ -78,8 +79,10 @@ router.post(
       thumbUrl = thumbnailUrl(url);
       cloudinaryPublicId = publicId;
     } else if (imageUrl) {
+      // Image was already uploaded to Cloudinary (via POST /api/uploads)
       originalUrl = imageUrl;
       thumbUrl = thumbnailUrl(imageUrl);
+      cloudinaryPublicId = imagePublicId || undefined;
     } else {
       throw new AppError('Either an image file or imageUrl is required', 400);
     }
@@ -127,6 +130,29 @@ router.delete('/images/:id', asyncHandler(async (req: AuthRequest, res: Response
   }
 
   res.json({ message: 'Image deleted successfully' });
+}));
+
+// GET /api/stats/accuracy — average confidence of all auto-detected annotations
+router.get('/stats/accuracy', asyncHandler(async (req: AuthRequest, res: Response): Promise<void> => {
+  const images = await Image.find({ userId: req.userId }).select('annotations');
+
+  let totalConfidence = 0;
+  let autoAnnotationCount = 0;
+
+  for (const image of images) {
+    for (const annotation of image.annotations) {
+      if (annotation.detectionMethod === 'auto' && annotation.confidence != null) {
+        totalConfidence += annotation.confidence;
+        autoAnnotationCount++;
+      }
+    }
+  }
+
+  const accuracy = autoAnnotationCount > 0
+    ? Math.round((totalConfidence / autoAnnotationCount) * 100) / 100
+    : null;
+
+  res.json({ accuracy, autoAnnotationCount });
 }));
 
 export { router as imagesRouter };

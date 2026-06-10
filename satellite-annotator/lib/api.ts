@@ -38,15 +38,24 @@ api.interceptors.response.use(
   }
 );
 
-// ─── Fetch a blob/object URL and return a Blob ────────────────────────────────
-// Used in the annotate page to convert a local blob:// URL into a File
-// before uploading to the backend.
-export async function fetchBlob(url: string): Promise<Blob> {
-  const response = await fetch(url);
-  return response.blob();
+// ─── Upload an image to Cloudinary via the backend ────────────────────────────
+// Called as soon as the user picks a file on the annotate page. The returned
+// Cloudinary URL is kept in frontend state and reused for the AI service and
+// when saving the annotated image to a category.
+export interface UploadedImage {
+  url: string;
+  publicId: string;
+  thumbnail: string;
+  width: number;
+  height: number;
 }
 
-// ─── Check if a URL is already hosted externally (e.g. Cloudinary) ───────────
-export function isHostedUrl(url: string): boolean {
-  return url.startsWith('http://') || url.startsWith('https://');
+export async function uploadImage(file: File | Blob, name?: string): Promise<UploadedImage> {
+  const formData = new FormData();
+  formData.append('image', file, name ?? (file instanceof File ? file.name : 'image.jpg'));
+
+  const { data } = await api.post<UploadedImage>('/uploads', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  return data;
 }

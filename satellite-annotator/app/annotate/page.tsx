@@ -13,6 +13,7 @@ import {
   Layers,
   ChevronLeft,
   ImagePlus,
+  FileDown,
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import { AuthGuard } from '@/components/layout/AuthGuard';
@@ -22,18 +23,23 @@ import { SaveAnnotationModal } from '@/components/annotation/SaveAnnotationModal
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { useAppStore } from '@/lib/store';
-import { runSAM2Segmentation } from '@/lib/segmentation';
-import { runObjectDetection } from '@/lib/detection';
-import { fetchBlob, isHostedUrl } from '@/lib/api';
+import { prepareImage, segmentAtPoint, toDetectionResult } from '@/lib/ai';
+import { exportYoloDataset } from '@/lib/exportYolo';
+import { uploadImage } from '@/lib/api';
 import { getApiErrorMessage } from '@/lib/errors';
 import { useAddImage } from '@/hooks/useImages';
 import { DetectionResult } from '@/types';
+import type { CanvasControls } from '@/components/annotation/AnnotationCanvas';
 
 // Dynamically import canvas to avoid SSR issues with Konva
 const AnnotationCanvas = dynamic(
   () => import('@/components/annotation/AnnotationCanvas').then((m) => m.AnnotationCanvas),
   { ssr: false, loading: () => <CanvasLoading /> }
 );
+
+// SegFormer classes that don't represent an identifiable object — when the AI
+// returns one of these, the user is asked to label the region manually.
+const NON_OBJECT_LABELS = ['Background', 'Unlabeled', 'Unknown'];
 
 function CanvasLoading() {
   return (
@@ -59,6 +65,7 @@ function AnnotateContent() {
   const {
     currentImageUrl,
     currentImageName,
+    currentImagePublicId,
     setCurrentImage,
     annotations,
     addAnnotation,
@@ -68,6 +75,10 @@ function AnnotateContent() {
   const addImage = useAddImage();
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState('');
+  const [isAutoDetecting, setIsAutoDetecting] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
 
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -85,6 +96,7 @@ function AnnotateContent() {
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const canvasControlsRef = useRef<CanvasControls | null>(null);
 
   useEffect(() => {
     const updateSize = () => {
@@ -114,13 +126,32 @@ function AnnotateContent() {
     img.src = currentImageUrl;
   }, [currentImageUrl]);
 
-  const handleFileUpload = useCallback((file: File) => {
+  const handleFileUpload = useCallback(async (file: File) => {
     if (!file.type.startsWith('image/')) return;
-    const url = URL.createObjectURL(file);
-    setCurrentImage(url, file.name);
-    clearAnnotations();
-    setSelectedAnnotationId(null);
-    // imageDimensions will be set by the useEffect above once the URL changes
+    setIsUploading(true);
+    setUploadError('');
+
+    try {
+      // 1. Upload to Cloudinary via the backend — the frontend only keeps the URL
+      const uploaded = await uploadImage(file);
+      setCurrentImage(uploaded.url, file.name, uploaded.publicId);
+      clearAnnotations();
+      setSelectedAnnotationId(null);
+      setIsUploading(false);
+
+      // 2. Warm up the AI service with the Cloudinary URL: it downloads the
+      //    image, embeds it in SAM2 and caches YOLO/SegFormer outputs so the
+      //    first click is fast. Annotation + detection only happen on click.
+      setIsAutoDetecting(true);
+      const prepared = await prepareImage(uploaded.url);
+      setImageDimensions({ width: prepared.width, height: prepared.height });
+    } catch (err: unknown) {
+      const message = getApiErrorMessage(err);
+      setUploadError(message || 'Upload or AI analysis failed. Please try again.');
+    } finally {
+      setIsUploading(false);
+      setIsAutoDetecting(false);
+    }
   }, [setCurrentImage, clearAnnotations]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
@@ -139,19 +170,20 @@ function AnnotateContent() {
     setPendingClick({ x, y });
 
     try {
-      const [segResult, detResult] = await Promise.all([
-        runSAM2Segmentation(imageDimensions.width || 800, imageDimensions.height || 600, x, y),
-        runObjectDetection(x, y, imageDimensions.width || 800, imageDimensions.height || 600),
-      ]);
+      // One round trip to the AI service: SAM2 segments at the clicked point,
+      // YOLO/SegFormer classify the region (same pipeline as the notebook).
+      const seg = await segmentAtPoint(currentImageUrl, x, y);
 
-      setPendingSegmentation(segResult.points);
+      setPendingSegmentation(seg.points);
       setPendingImageSize({ width: imageDimensions.width || 800, height: imageDimensions.height || 600 });
 
-      if (detResult) {
-        setDetectionResult(detResult);
-        setDetectionFailed(false);
-      } else {
+      // "Background"-type classes mean the AI couldn't identify a real object,
+      // so ask the user to label the segmented region manually instead.
+      if (NON_OBJECT_LABELS.includes(seg.label)) {
         setDetectionFailed(true);
+      } else {
+        setDetectionResult(toDetectionResult(seg));
+        setDetectionFailed(false);
       }
     } catch {
       setDetectionFailed(true);
@@ -187,33 +219,44 @@ function AnnotateContent() {
     setIsProcessing(false);
   }, []);
 
+  // Export the current image + annotations as a YOLOv8 segmentation dataset
+  // ZIP (dataset/images, dataset/labels, classes.txt, data.yaml).
+  const handleExportYolo = useCallback(async () => {
+    if (!currentImageUrl || !currentImageName || annotations.length === 0) return;
+    setIsExporting(true);
+    try {
+      await exportYoloDataset(currentImageName, [
+        {
+          name: currentImageName,
+          imageUrl: currentImageUrl,
+          width: imageDimensions.width,
+          height: imageDimensions.height,
+          annotations: annotations.map((a) => ({ label: a.label, points: a.points })),
+        },
+      ]);
+    } catch {
+      alert('Export failed. Please try again.');
+    } finally {
+      setIsExporting(false);
+    }
+  }, [currentImageUrl, currentImageName, annotations, imageDimensions]);
+
   const handleSaveToCategory = useCallback(async (categoryId: string) => {
     if (!currentImageUrl || !currentImageName) return;
     setIsSaving(true);
     setSaveError('');
     try {
-      if (isHostedUrl(currentImageUrl)) {
-        // Re-annotation: image is already on Cloudinary — pass the URL directly
-        await addImage.mutateAsync({
-          categoryId,
-          name: currentImageName,
-          existingImageUrl: currentImageUrl,
-          width: imageDimensions.width,
-          height: imageDimensions.height,
-          annotations: [...annotations],
-        });
-      } else {
-        // New upload: blob:// URL — fetch the file and send as multipart
-        const blob = await fetchBlob(currentImageUrl);
-        await addImage.mutateAsync({
-          categoryId,
-          name: currentImageName,
-          imageFile: blob,
-          width: imageDimensions.width,
-          height: imageDimensions.height,
-          annotations: [...annotations],
-        });
-      }
+      // The image already lives on Cloudinary (uploaded on selection),
+      // so saving only sends the URL + annotations — never the file again.
+      await addImage.mutateAsync({
+        categoryId,
+        name: currentImageName,
+        existingImageUrl: currentImageUrl,
+        imagePublicId: currentImagePublicId,
+        width: imageDimensions.width,
+        height: imageDimensions.height,
+        annotations: [...annotations],
+      });
 
       setShowSaveModal(false);
       clearAnnotations();
@@ -225,7 +268,7 @@ function AnnotateContent() {
     } finally {
       setIsSaving(false);
     }
-  }, [currentImageUrl, currentImageName, annotations, imageDimensions, addImage, clearAnnotations, setCurrentImage, router]);
+  }, [currentImageUrl, currentImageName, currentImagePublicId, annotations, imageDimensions, addImage, clearAnnotations, setCurrentImage, router]);
 
   return (
     <div className="h-screen pt-16 flex flex-col overflow-hidden">
@@ -264,6 +307,15 @@ function AnnotateContent() {
                 }}
               >
                 <span className="hidden sm:inline">Clear</span>
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<FileDown size={14} />}
+                onClick={handleExportYolo}
+                disabled={isExporting}
+              >
+                <span className="hidden sm:inline">{isExporting ? 'Exporting...' : 'Export'}</span>
               </Button>
               <Button
                 size="sm"
@@ -306,10 +358,23 @@ function AnnotateContent() {
                 onSelectAnnotation={setSelectedAnnotationId}
                 containerWidth={canvasSize.width}
                 containerHeight={canvasSize.height}
+                controlsRef={canvasControlsRef}
               />
 
+              {/* Auto-detection banner */}
+              {isAutoDetecting && (
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 pointer-events-none">
+                  <div className="glass-card rounded-xl px-4 py-2.5 border border-[rgba(88,166,255,0.3)] flex items-center gap-2.5">
+                    <div className="spinner" style={{ width: 14, height: 14 }} />
+                    <p className="text-xs text-[#e6edf3]">
+                      Preparing AI model (SAM2 + YOLO)... click any object when ready
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {/* Canvas hints */}
-              {annotations.length === 0 && !isProcessing && (
+              {annotations.length === 0 && !isProcessing && !isAutoDetecting && (
                 <div className="absolute bottom-4 left-1/2 -translate-x-1/2 pointer-events-none">
                   <div className="glass-card rounded-xl px-4 py-2.5 border border-[rgba(88,166,255,0.2)] text-center">
                     <p className="text-xs text-[#8b949e]">
@@ -319,15 +384,27 @@ function AnnotateContent() {
                 </div>
               )}
 
-              {/* Zoom controls */}
+              {/* Zoom controls (up to 800%) */}
               <div className="absolute top-3 right-3 flex flex-col gap-1">
-                <button className="w-8 h-8 glass-card rounded-lg flex items-center justify-center text-[#8b949e] hover:text-[#e6edf3] border border-[#21262d] transition-colors">
+                <button
+                  title="Zoom in"
+                  onClick={() => canvasControlsRef.current?.zoomIn()}
+                  className="w-8 h-8 glass-card rounded-lg flex items-center justify-center text-[#8b949e] hover:text-[#e6edf3] border border-[#21262d] transition-colors"
+                >
                   <ZoomIn size={15} />
                 </button>
-                <button className="w-8 h-8 glass-card rounded-lg flex items-center justify-center text-[#8b949e] hover:text-[#e6edf3] border border-[#21262d] transition-colors">
+                <button
+                  title="Zoom out"
+                  onClick={() => canvasControlsRef.current?.zoomOut()}
+                  className="w-8 h-8 glass-card rounded-lg flex items-center justify-center text-[#8b949e] hover:text-[#e6edf3] border border-[#21262d] transition-colors"
+                >
                   <ZoomOut size={15} />
                 </button>
-                <button className="w-8 h-8 glass-card rounded-lg flex items-center justify-center text-[#8b949e] hover:text-[#e6edf3] border border-[#21262d] transition-colors">
+                <button
+                  title="Reset view"
+                  onClick={() => canvasControlsRef.current?.resetView()}
+                  className="w-8 h-8 glass-card rounded-lg flex items-center justify-center text-[#8b949e] hover:text-[#e6edf3] border border-[#21262d] transition-colors"
+                >
                   <RotateCcw size={15} />
                 </button>
               </div>
@@ -335,25 +412,36 @@ function AnnotateContent() {
           ) : (
             /* Upload drop zone */
             <div className="flex items-center justify-center h-full">
-              <div
-                className="upload-zone rounded-3xl p-16 flex flex-col items-center text-center cursor-pointer max-w-md mx-4"
-                onClick={() => fileInputRef.current?.click()}
-              >
-                <div className="w-20 h-20 rounded-3xl bg-[rgba(88,166,255,0.08)] border border-[rgba(88,166,255,0.2)] flex items-center justify-center mb-6">
-                  <ImagePlus size={36} className="text-[#58a6ff]" />
+              {isUploading ? (
+                <div className="flex flex-col items-center gap-4">
+                  <div className="spinner" style={{ width: 36, height: 36 }} />
+                  <p className="text-sm font-medium text-[#e6edf3]">Uploading image...</p>
                 </div>
-                <h3 className="text-xl font-semibold text-[#e6edf3] mb-2">
-                  Upload Satellite Image
-                </h3>
-                <p className="text-sm text-[#8b949e] mb-6 leading-relaxed">
-                  Drag & drop or click to upload a satellite image.
-                  Supports JPEG, PNG, TIFF, WebP.
-                </p>
-                <Button icon={<Upload size={16} />}>Choose Image</Button>
-                <p className="text-xs text-[#8b949e] mt-4">
-                  Maximum file size: 50MB
-                </p>
-              </div>
+              ) : (
+                <div
+                  className="upload-zone rounded-3xl p-16 flex flex-col items-center text-center cursor-pointer max-w-md mx-4"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <div className="w-20 h-20 rounded-3xl bg-[rgba(88,166,255,0.08)] border border-[rgba(88,166,255,0.2)] flex items-center justify-center mb-6">
+                    <ImagePlus size={36} className="text-[#58a6ff]" />
+                  </div>
+                  <h3 className="text-xl font-semibold text-[#e6edf3] mb-2">
+                    Upload Satellite Image
+                  </h3>
+                  <p className="text-sm text-[#8b949e] mb-6 leading-relaxed">
+                    Drag & drop or click to upload a satellite image.
+                    It is hosted on Cloudinary, then SAM2 + YOLO + SegFormer
+                    annotate and detect objects automatically.
+                  </p>
+                  <Button icon={<Upload size={16} />}>Choose Image</Button>
+                  <p className="text-xs text-[#8b949e] mt-4">
+                    Maximum file size: 50MB
+                  </p>
+                  {uploadError && (
+                    <p className="text-xs text-[#f85149] mt-3">{uploadError}</p>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>

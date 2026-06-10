@@ -6,6 +6,7 @@ import { connectDB } from './config/db';
 import { authRouter } from './routes/auth';
 import { categoriesRouter } from './routes/categories';
 import { imagesRouter } from './routes/images';
+import { uploadsRouter } from './routes/uploads';
 import { errorHandler } from './middleware/errorHandler';
 
 const app = express();
@@ -23,6 +24,7 @@ app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 // ─── Routes ───────────────────────────────────────────────────────────────────
 app.use('/api/auth', authRouter);
 app.use('/api/categories', categoriesRouter);
+app.use('/api/uploads', uploadsRouter);
 app.use('/api', imagesRouter);
 
 // Health check

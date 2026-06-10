@@ -30,3 +30,12 @@ Thumbs.db
 # Misc
 .vercel
 coverage/
+
+# AI service — model weights are downloaded locally, never committed
+ai-service/__pycache__/
+ai-service/checkpoints/*
+!ai-service/checkpoints/.gitkeep
+ai-service/weights of yolo model/*
+!ai-service/weights of yolo model/.gitkeep
+ai-service/local_segformer/*
+!ai-service/local_segformer/.gitkeep

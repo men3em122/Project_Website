@@ -12,6 +12,7 @@ import {
   Trash2,
   ArchiveIcon,
   Loader2,
+  FileDown,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/layout/AuthGuard';
 import { Button } from '@/components/ui/Button';
@@ -19,6 +20,7 @@ import { Badge } from '@/components/ui/Badge';
 import { useCategories } from '@/hooks/useCategories';
 import { useCategoryImages, useDeleteImage } from '@/hooks/useImages';
 import { downloadCategoryAsZip } from '@/lib/downloadAnnotated';
+import { exportYoloDataset } from '@/lib/exportYolo';
 import { formatDate } from '@/lib/utils';
 import { AnnotatedImage } from '@/types';
 
@@ -39,6 +41,7 @@ function CategoryContent() {
   const { data: images = [], isLoading: imagesLoading } = useCategoryImages(categoryId);
   const deleteImage = useDeleteImage(categoryId);
   const [zipProgress, setZipProgress] = useState<{ done: number; total: number } | null>(null);
+  const [yoloProgress, setYoloProgress] = useState<{ done: number; total: number } | null>(null);
 
   const category = categories.find((c) => c.id === categoryId);
 
@@ -66,6 +69,30 @@ function CategoryContent() {
       setZipProgress({ done, total });
     });
     setZipProgress(null);
+  };
+
+  // Export every image in this category as one YOLOv8 segmentation dataset
+  // (dataset/images + dataset/labels + classes.txt + data.yaml in a ZIP)
+  const handleExportYolo = async () => {
+    if (images.length === 0 || !category) return;
+    setYoloProgress({ done: 0, total: images.length });
+    try {
+      await exportYoloDataset(
+        category.name,
+        images.map((img) => ({
+          name: img.name,
+          imageUrl: img.originalUrl,
+          width: img.width,
+          height: img.height,
+          annotations: img.annotations.map((a) => ({ label: a.label, points: a.points })),
+        })),
+        (done, total) => setYoloProgress({ done, total })
+      );
+    } catch {
+      alert('YOLO export failed. Please try again.');
+    } finally {
+      setYoloProgress(null);
+    }
   };
 
   const handleDeleteImage = (img: AnnotatedImage) => {
@@ -111,9 +138,19 @@ function CategoryContent() {
             <div className="flex items-center gap-2 flex-shrink-0">
               <Button
                 variant="secondary"
+                icon={yoloProgress ? <Loader2 size={15} className="animate-spin" /> : <FileDown size={15} />}
+                onClick={handleExportYolo}
+                disabled={!!yoloProgress || !!zipProgress}
+              >
+                {yoloProgress
+                  ? `Exporting ${yoloProgress.done}/${yoloProgress.total}...`
+                  : 'Export YOLO Dataset'}
+              </Button>
+              <Button
+                variant="secondary"
                 icon={zipProgress ? <Loader2 size={15} className="animate-spin" /> : <ArchiveIcon size={15} />}
                 onClick={handleDownloadAll}
-                disabled={!!zipProgress}
+                disabled={!!zipProgress || !!yoloProgress}
               >
                 {zipProgress ? `Zipping ${zipProgress.done}/${zipProgress.total}...` : 'Download All'}
               </Button>

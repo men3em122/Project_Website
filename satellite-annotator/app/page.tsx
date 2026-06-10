@@ -61,7 +61,6 @@ const stats = [
   { value: '< 1s', label: 'Segmentation time' },
   { value: '2', label: 'Detection models' },
   { value: '18+', label: 'Object classes' },
-  { value: '100%', label: 'Client-side' },
 ];
 
 export default function HomePage() {
@@ -140,7 +139,7 @@ export default function HomePage() {
         </div>
 
         {/* Stats */}
-        <div className="max-w-3xl mx-auto mt-20 grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div className="max-w-3xl mx-auto mt-20 grid grid-cols-2 sm:grid-cols-3 gap-4">
           {stats.map((stat) => (
             <div
               key={stat.label}

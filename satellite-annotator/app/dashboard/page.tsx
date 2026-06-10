@@ -22,6 +22,7 @@ import { Input } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
 import { useCurrentUser } from '@/hooks/useAuth';
 import { useCategories, useCreateCategory } from '@/hooks/useCategories';
+import { useAccuracy } from '@/hooks/useImages';
 
 const newCatSchema = z.object({
   name: z.string().min(1, 'Category name is required').max(50),
@@ -43,6 +44,7 @@ function DashboardContent() {
   const { data: user } = useCurrentUser();
   const { data: categories = [], isLoading } = useCategories();
   const createCategory = useCreateCategory();
+  const { data: accuracyData } = useAccuracy();
   const [searchQuery, setSearchQuery] = useState('');
   const [showNewCatModal, setShowNewCatModal] = useState(false);
   const [createError, setCreateError] = useState('');
@@ -56,6 +58,12 @@ function DashboardContent() {
 
   const totalImages = categories.reduce((acc, cat) => acc + cat.imageCount, 0);
   const totalAnnotations = categories.reduce((acc, cat) => acc + cat.annotationCount, 0);
+  const accuracyDisplay =
+    accuracyData?.accuracy != null
+      ? `${(accuracyData.accuracy * 100).toFixed(1)}%`
+      : accuracyData?.autoAnnotationCount === 0
+      ? 'N/A'
+      : '—';
 
   const filteredCategories = categories.filter((cat) =>
     cat.name.toLowerCase().includes(searchQuery.toLowerCase())
@@ -109,7 +117,7 @@ function DashboardContent() {
             { label: 'Categories', value: categories.length, icon: <Grid3X3 size={18} className="text-[#58a6ff]" />, color: '#58a6ff' },
             { label: 'Images', value: totalImages, icon: <Layers size={18} className="text-[#bc8cff]" />, color: '#bc8cff' },
             { label: 'Annotations', value: totalAnnotations, icon: <Tag size={18} className="text-[#3fb950]" />, color: '#3fb950' },
-            { label: 'Accuracy', value: '94%', icon: <TrendingUp size={18} className="text-[#ffa657]" />, color: '#ffa657' },
+            { label: 'Accuracy', value: accuracyDisplay, icon: <TrendingUp size={18} className="text-[#ffa657]" />, color: '#ffa657' },
           ].map((stat) => (
             <div key={stat.label} className="glass-card rounded-2xl p-4 border border-[#21262d]">
               <div className="flex items-center justify-between mb-2">

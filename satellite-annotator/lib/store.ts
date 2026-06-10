@@ -7,7 +7,9 @@ import { ANNOTATION_COLORS } from '@/types';
 interface SessionState {
   currentImageUrl: string | null;
   currentImageName: string | null;
-  setCurrentImage: (url: string | null, name: string | null) => void;
+  /** Cloudinary public_id of the current image (set on fresh uploads) */
+  currentImagePublicId: string | null;
+  setCurrentImage: (url: string | null, name: string | null, publicId?: string | null) => void;
 
   annotations: Annotation[];
   annotationColorIndex: number;
@@ -21,7 +23,9 @@ interface SessionState {
 export const useAppStore = create<SessionState>()((set, get) => ({
   currentImageUrl: null,
   currentImageName: null,
-  setCurrentImage: (url, name) => set({ currentImageUrl: url, currentImageName: name }),
+  currentImagePublicId: null,
+  setCurrentImage: (url, name, publicId = null) =>
+    set({ currentImageUrl: url, currentImageName: name, currentImagePublicId: publicId }),
 
   annotations: [],
   annotationColorIndex: 0,

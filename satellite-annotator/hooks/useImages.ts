@@ -5,6 +5,26 @@ import { api } from '@/lib/api';
 import { AnnotatedImage } from '@/types';
 import { categoryKeys } from './useCategories';
 
+interface AccuracyResponse {
+  accuracy: number | null;
+  autoAnnotationCount: number;
+}
+
+export const statsKeys = {
+  accuracy: ['stats', 'accuracy'] as const,
+};
+
+export function useAccuracy() {
+  return useQuery<AccuracyResponse>({
+    queryKey: statsKeys.accuracy,
+    queryFn: async () => {
+      const { data } = await api.get<AccuracyResponse>('/stats/accuracy');
+      return data;
+    },
+    staleTime: 60 * 1000,
+  });
+}
+
 interface ImagesResponse {
   images: AnnotatedImage[];
 }
@@ -55,25 +75,20 @@ export function useAddImage() {
     mutationFn: async (payload: {
       categoryId: string;
       name: string;
-      /** Raw file blob — provided when the image was just uploaded from disk */
-      imageFile?: Blob;
-      /** Cloudinary URL — provided when re-annotating an existing image */
-      existingImageUrl?: string;
+      /** Cloudinary URL — images are always uploaded to Cloudinary on selection */
+      existingImageUrl: string;
+      /** Cloudinary public_id (when known) so the backend can delete the asset later */
+      imagePublicId?: string | null;
       width: number;
       height: number;
       annotations: AnnotatedImage['annotations'];
     }) => {
-      const { categoryId, name, imageFile, existingImageUrl, width, height, annotations } = payload;
+      const { categoryId, name, existingImageUrl, imagePublicId, width, height, annotations } = payload;
 
       const formData = new FormData();
-
-      if (imageFile) {
-        // Give the blob a filename; use the image name with a fallback extension
-        const ext = imageFile.type.split('/')[1] ?? 'jpg';
-        const filename = name.endsWith(`.${ext}`) ? name : `${name}.${ext}`;
-        formData.append('image', imageFile, filename);
-      } else if (existingImageUrl) {
-        formData.append('imageUrl', existingImageUrl);
+      formData.append('imageUrl', existingImageUrl);
+      if (imagePublicId) {
+        formData.append('imagePublicId', imagePublicId);
       }
 
       formData.append('name', name);

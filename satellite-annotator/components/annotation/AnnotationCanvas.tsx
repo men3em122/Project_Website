@@ -6,6 +6,15 @@ import Konva from 'konva';
 import { Annotation } from '@/types';
 import { hexToRgba } from '@/lib/utils';
 
+const MIN_ZOOM = 0.3;
+const MAX_ZOOM = 10; // 1000%
+
+export interface CanvasControls {
+  zoomIn: () => void;
+  zoomOut: () => void;
+  resetView: () => void;
+}
+
 interface AnnotationCanvasProps {
   imageUrl: string;
   annotations: Annotation[];
@@ -15,6 +24,8 @@ interface AnnotationCanvasProps {
   onSelectAnnotation: (id: string | null) => void;
   containerWidth: number;
   containerHeight: number;
+  /** Filled by the canvas so the parent toolbar can drive zoom in/out/reset */
+  controlsRef?: React.RefObject<CanvasControls | null>;
 }
 
 
@@ -27,6 +38,7 @@ export function AnnotationCanvas({
   onSelectAnnotation,
   containerWidth,
   containerHeight,
+  controlsRef,
 }: AnnotationCanvasProps) {
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
@@ -75,7 +87,7 @@ export function AnnotationCanvas({
     if (!pointer) return;
 
     const direction = e.evt.deltaY < 0 ? 1 : -1;
-    const newScale = Math.max(0.3, Math.min(5, oldScale * (1 + direction * 0.1)));
+    const newScale = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, oldScale * (1 + direction * 0.1)));
 
     const mousePointTo = {
       x: (pointer.x - stagePos.x) / oldScale,
@@ -88,6 +100,35 @@ export function AnnotationCanvas({
       y: pointer.y - mousePointTo.y * newScale,
     });
   }, [stageScale, stagePos]);
+
+  // Zoom keeping the center of the viewport fixed (used by the toolbar buttons)
+  const zoomAroundCenter = useCallback((factor: number) => {
+    setStageScale((oldScale) => {
+      const newScale = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, oldScale * factor));
+      const cx = containerWidth / 2;
+      const cy = containerHeight / 2;
+      setStagePos((pos) => ({
+        x: cx - ((cx - pos.x) / oldScale) * newScale,
+        y: cy - ((cy - pos.y) / oldScale) * newScale,
+      }));
+      return newScale;
+    });
+  }, [containerWidth, containerHeight]);
+
+  useEffect(() => {
+    if (!controlsRef) return;
+    controlsRef.current = {
+      zoomIn: () => zoomAroundCenter(1.5),
+      zoomOut: () => zoomAroundCenter(1 / 1.5),
+      resetView: () => {
+        setStageScale(1);
+        setStagePos({ x: 0, y: 0 });
+      },
+    };
+    return () => {
+      controlsRef.current = null;
+    };
+  }, [controlsRef, zoomAroundCenter]);
 
   const handleStageClick = useCallback((e: Konva.KonvaEventObject<MouseEvent>) => {
     if (e.target === e.target.getStage()) {
@@ -178,18 +219,19 @@ export function AnnotationCanvas({
                 onSelectAnnotation(ann.id === selectedId ? null : ann.id);
               }}
             >
-              {/* Polygon fill */}
+              {/* Polygon fill — stroke stays 1px-ish on screen at any zoom */}
               <Line
                 points={scaledPoints}
                 closed
                 fill={fillColor}
                 stroke={strokeColor}
                 strokeWidth={isSelected ? 2.5 : 1.5}
+                strokeScaleEnabled={false}
                 dash={isSelected ? [] : []}
                 opacity={1}
                 listening
               />
-              {/* Vertices */}
+              {/* Vertices — constant screen size regardless of zoom */}
               {isSelected &&
                 scaledPoints.reduce((acc: ReactElement[], _, idx) => {
                   if (idx % 2 === 0) {
@@ -198,35 +240,38 @@ export function AnnotationCanvas({
                         key={idx}
                         x={scaledPoints[idx]}
                         y={scaledPoints[idx + 1]}
-                        radius={3}
+                        radius={3 / stageScale}
                         fill={strokeColor}
                         stroke="#fff"
                         strokeWidth={1}
+                        strokeScaleEnabled={false}
                       />
                     );
                   }
                   return acc;
                 }, [])}
-              {/* Label background */}
-              <Rect
-                x={cx - 2}
-                y={cy - 11}
-                width={ann.label.length * 7 + 16}
-                height={20}
-                fill={strokeColor}
-                cornerRadius={4}
-                opacity={0.95}
-              />
-              {/* Label text */}
-              <Text
-                x={cx + 6}
-                y={cy - 7}
-                text={ann.label}
-                fontSize={11}
-                fontStyle="bold"
-                fill="#fff"
-                listening={false}
-              />
+              {/* Label — inverse-scaled so it keeps the same size on screen
+                  while the image underneath zooms */}
+              <Group x={cx} y={cy} scaleX={1 / stageScale} scaleY={1 / stageScale}>
+                <Rect
+                  x={-2}
+                  y={-11}
+                  width={ann.label.length * 7 + 16}
+                  height={20}
+                  fill={strokeColor}
+                  cornerRadius={4}
+                  opacity={0.95}
+                />
+                <Text
+                  x={6}
+                  y={-7}
+                  text={ann.label}
+                  fontSize={11}
+                  fontStyle="bold"
+                  fill="#fff"
+                  listening={false}
+                />
+              </Group>
             </Group>
           );
         })}
@@ -237,16 +282,17 @@ export function AnnotationCanvas({
             <Circle
               x={clickIndicator.x}
               y={clickIndicator.y}
-              radius={16}
+              radius={16 / stageScale}
               stroke="#58a6ff"
               strokeWidth={2}
+              strokeScaleEnabled={false}
               opacity={0.8}
               dash={[4, 4]}
             />
             <Circle
               x={clickIndicator.x}
               y={clickIndicator.y}
-              radius={4}
+              radius={4 / stageScale}
               fill="#58a6ff"
               opacity={0.9}
             />

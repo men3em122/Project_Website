@@ -64,7 +64,7 @@ export function ReadOnlyCanvas({
       const pointer = stage.getPointerPosition();
       if (!pointer) return;
       const direction = e.evt.deltaY < 0 ? 1 : -1;
-      const newScale = Math.max(0.3, Math.min(8, oldScale * (1 + direction * 0.1)));
+      const newScale = Math.max(0.3, Math.min(10, oldScale * (1 + direction * 0.1)));
       const mousePointTo = {
         x: (pointer.x - stagePos.x) / oldScale,
         y: (pointer.y - stagePos.y) / oldScale,
@@ -142,10 +142,11 @@ export function ReadOnlyCanvas({
                 fill={fillColor}
                 stroke={ann.color}
                 strokeWidth={isSelected ? 3 : 1.8}
+                strokeScaleEnabled={false}
                 listening
               />
 
-              {/* Vertex dots when selected */}
+              {/* Vertex dots when selected — constant screen size */}
               {isSelected &&
                 scaledPoints.reduce((acc: ReactElement[], _, idx) => {
                   if (idx % 2 === 0) {
@@ -154,35 +155,39 @@ export function ReadOnlyCanvas({
                         key={idx}
                         x={scaledPoints[idx]}
                         y={scaledPoints[idx + 1]}
-                        radius={4}
+                        radius={4 / stageScale}
                         fill={ann.color}
                         stroke="#fff"
                         strokeWidth={1.5}
+                        strokeScaleEnabled={false}
                       />
                     );
                   }
                   return acc;
                 }, [])}
 
-              {/* Label badge */}
-              <Rect
-                x={cx - 2}
-                y={cy - 11}
-                width={labelWidth}
-                height={20}
-                fill={ann.color}
-                cornerRadius={4}
-                opacity={0.95}
-              />
-              <Text
-                x={cx + 6}
-                y={cy - 7}
-                text={ann.label}
-                fontSize={11}
-                fontStyle="bold"
-                fill="#fff"
-                listening={false}
-              />
+              {/* Label badge — inverse-scaled so it stays the same size
+                  on screen while the image zooms */}
+              <Group x={cx} y={cy} scaleX={1 / stageScale} scaleY={1 / stageScale}>
+                <Rect
+                  x={-2}
+                  y={-11}
+                  width={labelWidth}
+                  height={20}
+                  fill={ann.color}
+                  cornerRadius={4}
+                  opacity={0.95}
+                />
+                <Text
+                  x={6}
+                  y={-7}
+                  text={ann.label}
+                  fontSize={11}
+                  fontStyle="bold"
+                  fill="#fff"
+                  listening={false}
+                />
+              </Group>
             </Group>
           );
         })}
