@@ -14,7 +14,11 @@ build/
 .env.test.local
 .env.production.local
 
-# Main-branch cloud credentials saved by start.ps1 (never commit)
+# Local launcher scripts (not committed — local machine only)
+start.ps1
+stop.ps1
+
+# Cloud credentials cache (never commit)
 .env.main.secrets
 
 # Logs

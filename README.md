@@ -1,16 +1,9 @@
-# OrbitAnnotate — Online Mode (`main` branch)
+# OrbitAnnotate
 
 Full-stack satellite image annotation platform. Upload a satellite image, the
 AI pipeline (SAM2 + YOLO + SegFormer) segments and classifies objects you click,
 and annotations can be saved to categories or exported as a YOLOv8 segmentation
 training dataset.
-
-> **Branch overview**
->
-> | Branch | Storage | Image hosting | Internet required |
-> |--------|---------|---------------|-------------------|
-> | `main` | MongoDB Atlas | Cloudinary CDN | Yes |
-> | `offline-use` | SQLite file | Local `/uploads/` | No |
 
 ---
 
@@ -22,7 +15,7 @@ training dataset.
 | `backend/` | Node.js / Express / MongoDB / Cloudinary API (port 5000) |
 | `ai-service/` | Python FastAPI — SAM2 + YOLO + SegFormer (port 8000) |
 
-## How it connects (online mode)
+## How it connects
 
 ```
 Frontend (:3000)
@@ -34,53 +27,19 @@ Frontend (:3000)
 
 ---
 
-## Quick start (recommended)
+## 1. AI Service setup (models)
 
-A PowerShell launcher handles branch selection, `.env` configuration, dependency
-installation, and starts all three services automatically.
-
-```powershell
-# From the Project_Website folder — only needs to be done once:
-Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force
-
-# Every time you want to start the project:
-cd D:\Grad\Project_Website
-.\start.ps1
-```
-
-The script will ask:
-
-```
-  OrbitAnnotate - Which mode do you want to run?
-
-    [1]  main         (MongoDB Atlas + Cloudinary)  <-- you are here
-    [2]  offline-use  (SQLite + local uploads)
-
-  Enter 1 or 2:
-```
-
-- Pick **1** for online / cloud mode.
-- First time on `main`: the script prompts for your MongoDB URI and Cloudinary
-  credentials and saves them to `.env.main.secrets` (gitignored). Every run
-  after that reads them silently.
-- The script writes the correct `.env` files, runs `npm install` / `pip install`,
-  then opens three terminal windows — one per service.
-- To stop everything: `.\stop.ps1`
-
-> **-SkipInstall flag** — If dependencies are already installed and you just
-> want a fast restart, use `.\start.ps1 -SkipInstall`.
-
----
-
-## One-time setup — AI models
-
-> Only needed once. These files are **not committed** (listed in `.gitignore`).
+The AI service needs **Python ≥ 3.10**, PyTorch (CUDA recommended), and three
+models. All model files live inside `ai-service/` and are **not committed to
+git** — download them as described below.
 
 ```
 ai-service/
  ├── checkpoints/                 ← SAM2 checkpoint (.pt) goes here
- ├── weights of yolo model/       ← YOLO weights (best.pt) go here
- └── local_segformer/             ← (optional) local SegFormer copy goes here
+ ├── weights of yolo model/       ← trained YOLO weights (best.pt) go here
+ ├── local_segformer/             ← (optional) local SegFormer copy goes here
+ ├── main.py
+ └── requirements.txt
 ```
 
 ### a) Install SAM2
@@ -96,7 +55,8 @@ pip install -e .
 
 > On Windows, CPython + CUDA on native Windows works fine for inference.
 
-Download the **SAM 2.1 Hiera-Large** checkpoint into `ai-service/checkpoints/`:
+Then download the **SAM 2.1 Hiera-Large checkpoint** and place it in
+`ai-service/checkpoints/`:
 
 ```bash
 curl -L -o "ai-service/checkpoints/sam2.1_hiera_large.pt" ^
@@ -105,7 +65,7 @@ curl -L -o "ai-service/checkpoints/sam2.1_hiera_large.pt" ^
 
 ### b) YOLO weights
 
-Place your trained weights at:
+Place the trained weights at:
 
 ```
 ai-service/weights of yolo model/best.pt
@@ -114,12 +74,13 @@ ai-service/weights of yolo model/best.pt
 ### c) SegFormer (land-cover classification)
 
 The land-cover classifier is
-[`wu-pr-gw/segformer-b2-finetuned-with-LoveDA`](https://huggingface.co/wu-pr-gw/segformer-b2-finetuned-with-LoveDA).
+[`wu-pr-gw/segformer-b2-finetuned-with-LoveDA`](https://huggingface.co/wu-pr-gw/segformer-b2-finetuned-with-LoveDA)
+(classes: Building, Road, Water, Barren, Forest, Agriculture, Background).
 
-**Default (online mode):** nothing to do — it downloads from Hugging Face on
-the first start and is cached automatically.
+**Default:** do nothing — it downloads from Hugging Face on the first start
+and is cached automatically.
 
-**Optional local copy:** to pre-download for faster cold starts or offline use:
+**Optional local copy** (faster cold starts):
 
 ```bash
 cd ai-service
@@ -128,20 +89,16 @@ from transformers import SegformerForSemanticSegmentation, AutoImageProcessor
 m = 'wu-pr-gw/segformer-b2-finetuned-with-LoveDA'
 SegformerForSemanticSegmentation.from_pretrained(m).save_pretrained('local_segformer')
 AutoImageProcessor.from_pretrained(m).save_pretrained('local_segformer')
-print('Saved to local_segformer/')
 "
 ```
 
-### d) Install AI service Python dependencies
+### d) Install dependencies and run
 
 ```bash
 cd ai-service
 pip install -r requirements.txt
+python -u main.py             # serves on http://localhost:8000
 ```
-
-> `.\start.ps1` runs `pip install` automatically on every launch.
-
-Verify the service is healthy:
 
 ```bash
 curl http://localhost:8000/health
@@ -150,17 +107,16 @@ curl http://localhost:8000/health
 
 ---
 
-## Manual setup (alternative to start.ps1)
-
-### Backend
+## 2. Backend setup
 
 ```bash
 cd backend
+cp .env.example .env
 npm install
 npm run dev            # http://localhost:5000
 ```
 
-Required `backend/.env` keys for online mode:
+Required `.env` values (see `backend/.env.example`):
 
 ```env
 PORT=5000
@@ -175,9 +131,9 @@ CLOUDINARY_API_KEY=<api_key>
 CLOUDINARY_API_SECRET=<api_secret>
 ```
 
-> `start.ps1` writes this file automatically on every run.
+---
 
-### Frontend
+## 3. Frontend setup
 
 ```bash
 cd satellite-annotator
@@ -185,42 +141,41 @@ npm install
 npm run dev            # http://localhost:3000
 ```
 
-`satellite-annotator/.env.local` (created automatically by `start.ps1`):
+Create `satellite-annotator/.env.local`:
 
 ```env
 NEXT_PUBLIC_API_URL=http://localhost:5000/api
 NEXT_PUBLIC_AI_API_URL=http://localhost:8000
 ```
 
-### AI service
-
-```bash
-cd ai-service
-python -u main.py      # http://localhost:8000
-```
-
 ---
 
-## Switching to offline mode
+## Running the whole project
 
-Run `.\start.ps1` and pick **2** — the script automatically:
+Start the three services in separate terminals:
 
-1. Runs `git checkout offline-use`
-2. Writes a `backend/.env` with `SERVER_URL` + `SQLITE_PATH` (no cloud credentials needed)
-3. Sets `TRANSFORMERS_OFFLINE=1` so SegFormer loads only from `local_segformer/`
-4. Installs the correct npm packages (`sql.js` instead of `mongoose` + `cloudinary`)
+```bash
+# Terminal 1 — AI service
+cd ai-service
+python -u main.py
+
+# Terminal 2 — backend
+cd backend
+npm run dev
+
+# Terminal 3 — frontend
+cd satellite-annotator
+npm run dev
+```
+
+Then open <http://localhost:3000>, sign up, go to **Annotate**, and upload a
+satellite image (JPEG/PNG/TIFF). Click any object to get a SAM2 segmentation
+polygon with a YOLO/SegFormer label, then save to a category or use **Export**
+to download a YOLOv8-segmentation dataset ZIP.
 
 ---
 
 ## Environment files
 
-| File | Created by | Committed |
-|------|-----------|-----------|
-| `backend/.env` | `start.ps1` (auto) | No |
-| `ai-service/.env` | `start.ps1` (auto) | No |
-| `satellite-annotator/.env.local` | `start.ps1` (auto, first run) | No |
-| `.env.main.secrets` | `start.ps1` (first run on main) | No |
-| `backend/.env.example` | Manually maintained | Yes |
-| `ai-service/.env.example` | Manually maintained | Yes |
-
-Never commit real `.env` files or model weights — both are in `.gitignore`.
+Never commit real `.env` / `.env.local` files or model weights — both are
+listed in `.gitignore`.
