@@ -5,8 +5,8 @@ import { api } from '@/lib/api';
 import { AnnotatedImage } from '@/types';
 import { categoryKeys } from './useCategories';
 
-interface AccuracyResponse {
-  accuracy: number | null;
+export interface AccuracyResponse {
+  accuracy: number;
   autoAnnotationCount: number;
 }
 
@@ -121,13 +121,14 @@ export function useDeleteImage(categoryId: string) {
 
   return useMutation({
     mutationFn: async (imageId: string) => {
-      await api.delete(`/images/${imageId}`);
-      return imageId;
+      const { data } = await api.delete<{ message: string; stats: AccuracyResponse }>(`/images/${imageId}`);
+      return { imageId, stats: data.stats };
     },
-    onSuccess: (deletedId) => {
+    onSuccess: ({ imageId, stats }) => {
       queryClient.setQueryData<AnnotatedImage[]>(imageKeys.byCategory(categoryId), (old = []) =>
-        old.filter((img) => img.id !== deletedId)
+        old.filter((img) => img.id !== imageId)
       );
+      queryClient.setQueryData<AccuracyResponse>(statsKeys.accuracy, stats);
       queryClient.invalidateQueries({ queryKey: categoryKeys.all });
     },
   });

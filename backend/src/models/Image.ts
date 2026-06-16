@@ -145,4 +145,30 @@ export const ImageModel = {
   deleteByCategory(categoryId: string): void {
     db.prepare('DELETE FROM images WHERE category_id = ?').run(categoryId);
   },
+
+  computeStats(userId: string): { accuracy: number; autoAnnotationCount: number } {
+    const rows = db
+      .prepare('SELECT annotations FROM images WHERE user_id = ?')
+      .all(userId) as unknown as Pick<ImageRow, 'annotations'>[];
+
+    let totalConfidence = 0;
+    let autoAnnotationCount = 0;
+
+    for (const row of rows) {
+      const annotations = JSON.parse(row.annotations) as Annotation[];
+      for (const ann of annotations) {
+        if (ann.detectionMethod === 'auto' && ann.confidence != null) {
+          totalConfidence += ann.confidence;
+          autoAnnotationCount++;
+        }
+      }
+    }
+
+    const accuracy =
+      autoAnnotationCount > 0
+        ? Math.round((totalConfidence / autoAnnotationCount) * 100) / 100
+        : 0;
+
+    return { accuracy, autoAnnotationCount };
+  },
 };

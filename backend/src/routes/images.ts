@@ -124,7 +124,8 @@ router.delete(
     const image = ImageModel.delete(req.params.id, req.userId!);
     if (!image) throw new AppError('Image not found', 404);
     deleteLocalImage(image.localPath);
-    res.json({ message: 'Image deleted successfully' });
+    const stats = ImageModel.computeStats(req.userId!);
+    res.json({ message: 'Image deleted successfully', stats });
   })
 );
 
@@ -132,25 +133,7 @@ router.delete(
 router.get(
   '/stats/accuracy',
   asyncHandler(async (req: AuthRequest, res: Response): Promise<void> => {
-    const images = ImageModel.findByUser(req.userId!);
-    let totalConfidence = 0;
-    let autoAnnotationCount = 0;
-
-    for (const image of images) {
-      for (const annotation of image.annotations) {
-        if (annotation.detectionMethod === 'auto' && annotation.confidence != null) {
-          totalConfidence += annotation.confidence;
-          autoAnnotationCount++;
-        }
-      }
-    }
-
-    const accuracy =
-      autoAnnotationCount > 0
-        ? Math.round((totalConfidence / autoAnnotationCount) * 100) / 100
-        : null;
-
-    res.json({ accuracy, autoAnnotationCount });
+    res.json(ImageModel.computeStats(req.userId!));
   })
 );
 

@@ -58,12 +58,7 @@ function DashboardContent() {
 
   const totalImages = categories.reduce((acc, cat) => acc + cat.imageCount, 0);
   const totalAnnotations = categories.reduce((acc, cat) => acc + cat.annotationCount, 0);
-  const accuracyDisplay =
-    accuracyData?.accuracy != null
-      ? `${(accuracyData.accuracy * 100).toFixed(1)}%`
-      : accuracyData?.autoAnnotationCount === 0
-      ? 'N/A'
-      : '—';
+  const accuracyDisplay = `${((accuracyData?.accuracy ?? 0) * 100).toFixed(1)}%`;
 
   const filteredCategories = categories.filter((cat) =>
     cat.name.toLowerCase().includes(searchQuery.toLowerCase())

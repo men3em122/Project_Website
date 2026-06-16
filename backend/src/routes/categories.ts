@@ -69,17 +69,27 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response): Promise
 
 // DELETE /api/categories/:id — delete category and all its images
 router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response): Promise<void> => {
-  // Fetch images before deletion so we can clean up local files
+  // Verify the category belongs to this user before touching anything
+  const category = CategoryModel.findByIdAndUser(req.params.id, req.userId!);
+  if (!category) throw new AppError('Category not found', 404);
+
+  // Fetch images first so we can delete their local files after the DB is cleared
   const images = ImageModel.findByCategory(req.params.id);
 
-  const deleted = CategoryModel.delete(req.params.id, req.userId!);
-  if (!deleted) throw new AppError('Category not found', 404);
+  // Explicitly remove images from DB — sql.js does not reliably enforce
+  // ON DELETE CASCADE so we cannot rely on it
+  ImageModel.deleteByCategory(req.params.id);
 
+  // Now delete the category row itself
+  CategoryModel.delete(req.params.id, req.userId!);
+
+  // Remove uploaded files from disk
   for (const img of images) {
     deleteLocalImage(img.localPath);
   }
 
-  res.json({ message: 'Category deleted successfully' });
+  const stats = ImageModel.computeStats(req.userId!);
+  res.json({ message: 'Category deleted successfully', stats });
 }));
 
 export { router as categoriesRouter };
