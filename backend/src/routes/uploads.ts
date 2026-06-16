@@ -3,7 +3,7 @@ import multer from 'multer';
 import { protect, AuthRequest } from '../middleware/auth';
 import { asyncHandler } from '../middleware/asyncHandler';
 import { AppError } from '../middleware/AppError';
-import { uploadBuffer, thumbnailUrl } from '../config/cloudinary';
+import { saveImageLocally } from '../config/storage';
 
 const router = Router();
 router.use(protect);
@@ -18,26 +18,24 @@ const upload = multer({
 });
 
 // POST /api/uploads
-// Uploads the raw image to Cloudinary as soon as the user selects it in the
-// frontend. The frontend keeps the returned URL and uses it both for the AI
-// service (set-image / segment) and later when saving to a category.
+// Saves the image to the local uploads/ directory immediately on selection.
+// Returns the local URL so the frontend can pass it to the AI service and
+// then reference it when saving the annotated image to a category.
 router.post(
   '/',
   upload.single('image'),
   asyncHandler(async (req: AuthRequest, res: Response): Promise<void> => {
-    if (!req.file) {
-      throw new AppError('An image file is required', 400);
-    }
+    if (!req.file) throw new AppError('An image file is required', 400);
 
-    const { url, publicId, width, height } = await uploadBuffer(
+    const { url, thumbnail, width, height } = await saveImageLocally(
       req.file.buffer,
       req.file.mimetype
     );
 
     res.status(201).json({
       url,
-      publicId,
-      thumbnail: thumbnailUrl(url),
+      publicId: '',   // no cloud public ID in offline mode
+      thumbnail,
       width,
       height,
     });

@@ -1,31 +1,35 @@
 """
-OrbitAnnotate AI Service
-========================
-FastAPI wrapper around the interactive SAM2 + YOLO + SegFormer pipeline
-(from notebooks/interactive_sam.ipynb).
+OrbitAnnotate AI Service  — OFFLINE MODE
+=========================================
+FastAPI wrapper around the interactive SAM2 + YOLO + SegFormer pipeline.
+All models run locally; no internet connection is required at runtime.
+
+Model locations (all resolved relative to ai-service/):
+  SAM2 checkpoint : checkpoints/sam2.1_hiera_large.pt
+  YOLO weights    : weights of yolo model/best.pt
+  SegFormer       : local_segformer/  (must contain config.json + model weights)
 
 Endpoints
 ---------
 POST /set-image   { imageUrl }            -> { width, height, detections[] }
-    Downloads the image (e.g. from Cloudinary), caches it, embeds it in SAM2,
-    runs YOLO once on the full image and SegFormer once for land-cover.
-    Returns all YOLO detections so the frontend can show them immediately.
-
-POST /segment     { imageUrl, x, y }      -> { points[], label, confidence, model, samScore, area, perimeter, solidity, boundingBox }
-    SAM2 point-prompt segmentation at the clicked pixel. The mask is converted
-    to a polygon. The label comes from YOLO (if the click is inside a detected
-    box) or falls back to the SegFormer land-cover class of the mask.
-
-GET /health                               -> { status, device, models }
+POST /segment     { imageUrl, x, y }      -> { points[], label, confidence, ... }
+GET  /health                              -> { status, device, models }
 """
 
 import os
+import sys
 
 # Keep transformers from importing TensorFlow/Flax — we only use PyTorch.
 # This saves ~1.5 GB of RAM and a lot of startup time on low-memory machines.
 os.environ.setdefault("USE_TF", "0")
 os.environ.setdefault("USE_FLAX", "0")
 os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
+
+# Prevent the transformers library from downloading anything from Hugging Face.
+# All models must be present locally. Remove this line only if you want to
+# allow an initial download of the SegFormer weights.
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
 
 import io
 import threading
@@ -72,14 +76,33 @@ YOLO_WEIGHTS = os.getenv("YOLO_WEIGHTS") or _first_existing(
     os.path.join(BASE_DIR, "weights of yolo model", "best.pt"),
     fallback=r"C:\Users\menna\Desktop\sam\sam2\runs\detect\train-3\weights\best.pt",
 )
-# Use the locally saved SegFormer copy when present; otherwise transformers
-# downloads it from Hugging Face on first run.
 _LOCAL_SEGFORMER = os.path.join(BASE_DIR, "local_segformer")
-SEGFORMER_MODEL = os.getenv("SEGFORMER_MODEL") or (
-    _LOCAL_SEGFORMER
-    if os.path.exists(os.path.join(_LOCAL_SEGFORMER, "config.json"))
-    else "wu-pr-gw/segformer-b2-finetuned-with-LoveDA"
+
+# In offline mode the local directory MUST contain the model weights in
+# addition to config.json.  Presence of either pytorch_model.bin or
+# model.safetensors is used as the "weights present" signal.
+_segformer_has_weights = any(
+    os.path.exists(os.path.join(_LOCAL_SEGFORMER, f))
+    for f in ("pytorch_model.bin", "model.safetensors")
 )
+
+SEGFORMER_MODEL = os.getenv("SEGFORMER_MODEL") or (
+    _LOCAL_SEGFORMER if _segformer_has_weights else None
+)
+
+if SEGFORMER_MODEL is None:
+    print(
+        "\n❌  SegFormer model weights not found in ai-service/local_segformer/\n"
+        "   Download the weights once (with internet) and place them there:\n"
+        "     pytorch_model.bin  OR  model.safetensors\n"
+        "   alongside the existing config.json / preprocessor_config.json.\n"
+        "   You can download with:\n"
+        "     python -c \"from transformers import SegformerForSemanticSegmentation; "
+        "SegformerForSemanticSegmentation.from_pretrained("
+        "'wu-pr-gw/segformer-b2-finetuned-with-LoveDA').save_pretrained('local_segformer')\"\n",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 YOLO_CONF_THRESHOLD = float(os.getenv("YOLO_CONF_THRESHOLD", "0.10"))
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:3000")
 
@@ -140,6 +163,7 @@ _cache = {
 
 
 def _download_image(url: str) -> np.ndarray:
+    """Fetch the image from the local Express backend (http://localhost:5000/uploads/...)."""
     try:
         resp = requests.get(url, timeout=60)
         resp.raise_for_status()

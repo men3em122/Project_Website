@@ -1,51 +1,61 @@
-import mongoose, { Document, Schema } from 'mongoose';
 import bcrypt from 'bcryptjs';
+import { randomUUID } from 'crypto';
+import { db } from '../config/db';
 
-export interface IUser extends Document {
-  _id: mongoose.Types.ObjectId;
+export interface IUser {
+  id: string;
+  name: string;
+  email: string;
+  createdAt: string;
+}
+
+export interface IUserRow {
+  id: string;
   name: string;
   email: string;
   password: string;
-  createdAt: Date;
-  comparePassword(candidate: string): Promise<boolean>;
+  created_at: string;
 }
 
-const userSchema = new Schema<IUser>(
-  {
-    name: {
-      type: String,
-      required: [true, 'Name is required'],
-      trim: true,
-      minlength: 2,
-      maxlength: 100,
-    },
-    email: {
-      type: String,
-      required: [true, 'Email is required'],
-      unique: true,
-      lowercase: true,
-      trim: true,
-      match: [/^\S+@\S+\.\S+$/, 'Please enter a valid email'],
-    },
-    password: {
-      type: String,
-      required: [true, 'Password is required'],
-      minlength: 6,
-      select: false,
-    },
+export const UserModel = {
+  findByEmail(email: string): IUserRow | null {
+    return (
+      (db.prepare('SELECT * FROM users WHERE email = ?').get(email.toLowerCase()) as IUserRow | undefined) ?? null
+    );
   },
-  { timestamps: true }
-);
 
-userSchema.pre('save', async function (next) {
-  if (!this.isModified('password')) return next();
-  const salt = await bcrypt.genSalt(10);
-  this.password = await bcrypt.hash(this.password, salt);
-  next();
-});
+  findById(id: string): IUserRow | null {
+    return (
+      (db.prepare('SELECT * FROM users WHERE id = ?').get(id) as IUserRow | undefined) ?? null
+    );
+  },
 
-userSchema.methods.comparePassword = function (candidate: string): Promise<boolean> {
-  return bcrypt.compare(candidate, this.password);
+  async create(name: string, email: string, password: string): Promise<IUser> {
+    const id = randomUUID();
+    const hash = await bcrypt.hash(password, 10);
+    const now = new Date().toISOString();
+    db.prepare('INSERT INTO users (id, name, email, password, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run(id, name.trim(), email.toLowerCase(), hash, now);
+    return { id, name: name.trim(), email: email.toLowerCase(), createdAt: now };
+  },
+
+  updateName(id: string, name: string): IUser | null {
+    const row = this.findById(id);
+    if (!row) return null;
+    db.prepare('UPDATE users SET name = ? WHERE id = ?').run(name.trim(), id);
+    return { id, name: name.trim(), email: row.email, createdAt: row.created_at };
+  },
+
+  async updatePassword(id: string, newPassword: string): Promise<void> {
+    const hash = await bcrypt.hash(newPassword, 10);
+    db.prepare('UPDATE users SET password = ? WHERE id = ?').run(hash, id);
+  },
+
+  comparePassword(hash: string, candidate: string): Promise<boolean> {
+    return bcrypt.compare(candidate, hash);
+  },
+
+  toPublic(row: IUserRow): IUser {
+    return { id: row.id, name: row.name, email: row.email, createdAt: row.created_at };
+  },
 };
-
-export const User = mongoose.model<IUser>('User', userSchema);

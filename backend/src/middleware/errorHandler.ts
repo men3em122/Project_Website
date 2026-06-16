@@ -1,5 +1,4 @@
 import { Request, Response, NextFunction } from 'express';
-import mongoose from 'mongoose';
 import { AppError } from './AppError';
 
 export function errorHandler(
@@ -14,31 +13,22 @@ export function errorHandler(
   if (err instanceof AppError) {
     statusCode = err.statusCode;
     message = err.message;
-  } else if (err instanceof mongoose.Error.ValidationError) {
-    statusCode = 400;
-    const firstError = Object.values(err.errors)[0];
-    message = firstError?.message ?? 'Validation failed';
-  } else if (err instanceof mongoose.Error.CastError) {
-    statusCode = 400;
-    message = `Invalid ${err.path}`;
   } else if (
     typeof err === 'object' &&
     err !== null &&
-    'code' in err &&
-    (err as { code: number }).code === 11000
+    'message' in err &&
+    typeof (err as { message: unknown }).message === 'string' &&
+    (err as { message: string }).message.includes('UNIQUE constraint failed')
   ) {
+    // SQLite unique constraint violation (e.g. duplicate email)
     statusCode = 409;
     message = 'A record with this value already exists';
   } else if (err instanceof SyntaxError) {
     statusCode = 400;
     message = 'Invalid JSON format';
   } else if (err instanceof Error) {
-    if (err.message === 'Only image files are allowed') {
-      statusCode = 400;
-    }
-    if (err.name === 'MulterError') {
-      statusCode = 400;
-    }
+    if (err.message === 'Only image files are allowed') statusCode = 400;
+    if (err.name === 'MulterError') statusCode = 400;
     message = err.message || message;
   }
 

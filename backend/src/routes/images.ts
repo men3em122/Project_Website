@@ -1,12 +1,11 @@
 import { Router, Response } from 'express';
-import mongoose from 'mongoose';
 import multer from 'multer';
-import { Image } from '../models/Image';
-import { Category } from '../models/Category';
+import { ImageModel, IImage } from '../models/Image';
+import { CategoryModel } from '../models/Category';
 import { protect, AuthRequest } from '../middleware/auth';
 import { asyncHandler } from '../middleware/asyncHandler';
 import { AppError } from '../middleware/AppError';
-import { uploadBuffer, thumbnailUrl, deleteAsset } from '../config/cloudinary';
+import { saveImageLocally, deriveThumbnailUrl, urlToLocalPath, deleteLocalImage } from '../config/storage';
 
 const router = Router();
 router.use(protect);
@@ -20,69 +19,68 @@ const upload = multer({
   },
 });
 
-function serializeImage(img: InstanceType<typeof Image>) {
+function serializeImage(img: IImage) {
   return {
-    id: img._id.toString(),
+    id: img.id,
     name: img.name,
     originalUrl: img.originalUrl,
     thumbnail: img.thumbnail,
     width: img.width,
     height: img.height,
     annotations: img.annotations,
-    categoryId: img.categoryId.toString(),
-    createdAt: img.createdAt.toISOString(),
+    categoryId: img.categoryId,
+    createdAt: img.createdAt,
   };
 }
 
+// GET /api/categories/:categoryId/images
 router.get(
   '/categories/:categoryId/images',
   asyncHandler(async (req: AuthRequest, res: Response): Promise<void> => {
-    const category = await Category.findOne({ _id: req.params.categoryId, userId: req.userId });
-    if (!category) {
-      throw new AppError('Category not found', 404);
-    }
+    const category = CategoryModel.findByIdAndUser(req.params.categoryId, req.userId!);
+    if (!category) throw new AppError('Category not found', 404);
 
-    const images = await Image.find({ categoryId: req.params.categoryId }).sort({ createdAt: -1 });
+    const images = ImageModel.findByCategory(req.params.categoryId);
     res.json({ images: images.map(serializeImage) });
   })
 );
 
+// POST /api/categories/:categoryId/images
 router.post(
   '/categories/:categoryId/images',
   upload.single('image'),
   asyncHandler(async (req: AuthRequest, res: Response): Promise<void> => {
-    const category = await Category.findOne({ _id: req.params.categoryId, userId: req.userId });
-    if (!category) {
-      throw new AppError('Category not found', 404);
-    }
+    const category = CategoryModel.findByIdAndUser(req.params.categoryId, req.userId!);
+    if (!category) throw new AppError('Category not found', 404);
 
-    const { name, width, height, annotations, imageUrl, imagePublicId } = req.body as {
+    const { name, width, height, annotations, imageUrl } = req.body as {
       name?: string;
       width?: string;
       height?: string;
       annotations?: string;
       imageUrl?: string;
-      imagePublicId?: string;
     };
 
-    if (!name?.trim()) {
-      throw new AppError('Image name is required', 400);
-    }
+    if (!name?.trim()) throw new AppError('Image name is required', 400);
 
     let originalUrl: string;
     let thumbUrl: string;
-    let cloudinaryPublicId: string | undefined;
+    let localPath: string | undefined;
+    let imgWidth = Number(width ?? 0);
+    let imgHeight = Number(height ?? 0);
 
     if (req.file) {
-      const { url, publicId } = await uploadBuffer(req.file.buffer, req.file.mimetype);
-      originalUrl = url;
-      thumbUrl = thumbnailUrl(url);
-      cloudinaryPublicId = publicId;
+      const saved = await saveImageLocally(req.file.buffer, req.file.mimetype);
+      originalUrl = saved.url;
+      thumbUrl = saved.thumbnail;
+      localPath = saved.localPath;
+      imgWidth = saved.width;
+      imgHeight = saved.height;
     } else if (imageUrl) {
-      // Image was already uploaded to Cloudinary (via POST /api/uploads)
+      // Image was already saved locally via POST /api/uploads
       originalUrl = imageUrl;
-      thumbUrl = thumbnailUrl(imageUrl);
-      cloudinaryPublicId = imagePublicId || undefined;
+      thumbUrl = deriveThumbnailUrl(imageUrl);
+      localPath = urlToLocalPath(imageUrl);
     } else {
       throw new AppError('Either an image file or imageUrl is required', 400);
     }
@@ -90,20 +88,18 @@ router.post(
     let parsedAnnotations: unknown[] = [];
     if (annotations) {
       parsedAnnotations = JSON.parse(annotations);
-      if (!Array.isArray(parsedAnnotations)) {
-        throw new AppError('Invalid annotations JSON', 400);
-      }
+      if (!Array.isArray(parsedAnnotations)) throw new AppError('Invalid annotations JSON', 400);
     }
 
-    const image = await Image.create({
-      categoryId: new mongoose.Types.ObjectId(req.params.categoryId),
-      userId: new mongoose.Types.ObjectId(req.userId),
-      name: name.trim(),
+    const image = ImageModel.create({
+      categoryId: req.params.categoryId,
+      userId: req.userId!,
+      name,
       originalUrl,
       thumbnail: thumbUrl,
-      cloudinaryPublicId,
-      width: Number(width ?? 0),
-      height: Number(height ?? 0),
+      localPath,
+      width: imgWidth,
+      height: imgHeight,
       annotations: parsedAnnotations,
     });
 
@@ -111,48 +107,51 @@ router.post(
   })
 );
 
-router.get('/images/:id', asyncHandler(async (req: AuthRequest, res: Response): Promise<void> => {
-  const image = await Image.findOne({ _id: req.params.id, userId: req.userId });
-  if (!image) {
-    throw new AppError('Image not found', 404);
-  }
-  res.json({ image: serializeImage(image) });
-}));
+// GET /api/images/:id
+router.get(
+  '/images/:id',
+  asyncHandler(async (req: AuthRequest, res: Response): Promise<void> => {
+    const image = ImageModel.findByIdAndUser(req.params.id, req.userId!);
+    if (!image) throw new AppError('Image not found', 404);
+    res.json({ image: serializeImage(image) });
+  })
+);
 
-router.delete('/images/:id', asyncHandler(async (req: AuthRequest, res: Response): Promise<void> => {
-  const image = await Image.findOneAndDelete({ _id: req.params.id, userId: req.userId });
-  if (!image) {
-    throw new AppError('Image not found', 404);
-  }
+// DELETE /api/images/:id
+router.delete(
+  '/images/:id',
+  asyncHandler(async (req: AuthRequest, res: Response): Promise<void> => {
+    const image = ImageModel.delete(req.params.id, req.userId!);
+    if (!image) throw new AppError('Image not found', 404);
+    deleteLocalImage(image.localPath);
+    res.json({ message: 'Image deleted successfully' });
+  })
+);
 
-  if (image.cloudinaryPublicId) {
-    await deleteAsset(image.cloudinaryPublicId);
-  }
+// GET /api/stats/accuracy
+router.get(
+  '/stats/accuracy',
+  asyncHandler(async (req: AuthRequest, res: Response): Promise<void> => {
+    const images = ImageModel.findByUser(req.userId!);
+    let totalConfidence = 0;
+    let autoAnnotationCount = 0;
 
-  res.json({ message: 'Image deleted successfully' });
-}));
-
-// GET /api/stats/accuracy — average confidence of all auto-detected annotations
-router.get('/stats/accuracy', asyncHandler(async (req: AuthRequest, res: Response): Promise<void> => {
-  const images = await Image.find({ userId: req.userId }).select('annotations');
-
-  let totalConfidence = 0;
-  let autoAnnotationCount = 0;
-
-  for (const image of images) {
-    for (const annotation of image.annotations) {
-      if (annotation.detectionMethod === 'auto' && annotation.confidence != null) {
-        totalConfidence += annotation.confidence;
-        autoAnnotationCount++;
+    for (const image of images) {
+      for (const annotation of image.annotations) {
+        if (annotation.detectionMethod === 'auto' && annotation.confidence != null) {
+          totalConfidence += annotation.confidence;
+          autoAnnotationCount++;
+        }
       }
     }
-  }
 
-  const accuracy = autoAnnotationCount > 0
-    ? Math.round((totalConfidence / autoAnnotationCount) * 100) / 100
-    : null;
+    const accuracy =
+      autoAnnotationCount > 0
+        ? Math.round((totalConfidence / autoAnnotationCount) * 100) / 100
+        : null;
 
-  res.json({ accuracy, autoAnnotationCount });
-}));
+    res.json({ accuracy, autoAnnotationCount });
+  })
+);
 
 export { router as imagesRouter };
