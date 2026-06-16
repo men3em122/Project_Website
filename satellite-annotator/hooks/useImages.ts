@@ -129,6 +129,7 @@ export function useDeleteImage(categoryId: string) {
         old.filter((img) => img.id !== deletedId)
       );
       queryClient.invalidateQueries({ queryKey: categoryKeys.all });
+      queryClient.invalidateQueries({ queryKey: statsKeys.accuracy });
     },
   });
 }

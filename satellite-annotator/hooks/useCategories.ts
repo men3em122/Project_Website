@@ -74,6 +74,7 @@ export function useDeleteCategory() {
       queryClient.setQueryData<ApiCategory[]>(categoryKeys.list(), (old = []) =>
         old.filter((c) => c.id !== deletedId)
       );
+      queryClient.invalidateQueries({ queryKey: ['stats', 'accuracy'] });
     },
   });
 }
