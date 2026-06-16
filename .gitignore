@@ -31,6 +31,13 @@ Thumbs.db
 .vercel
 coverage/
 
+# Local launcher scripts (not committed — local machine only)
+start.ps1
+stop.ps1
+
+# Cloud credentials cache (never commit)
+.env.main.secrets
+
 # AI service — model weights are downloaded locally, never committed
 ai-service/__pycache__/
 ai-service/checkpoints/*
