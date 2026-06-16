@@ -105,12 +105,14 @@ export function useAddImage() {
       return { image: data.image, categoryId };
     },
     onSuccess: ({ image, categoryId }) => {
+      // Immediately prepend the new image to the cached list for this category
       queryClient.setQueryData<AnnotatedImage[]>(imageKeys.byCategory(categoryId), (old = []) => [
         image,
         ...old,
       ]);
-      // Refresh category thumbnails / counts
-      queryClient.invalidateQueries({ queryKey: categoryKeys.all });
+      // Invalidate the category list so imageCount, annotationCount, and
+      // thumbnails for the affected category are refreshed from the server
+      queryClient.invalidateQueries({ queryKey: categoryKeys.list() });
     },
   });
 }
