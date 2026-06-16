@@ -14,6 +14,9 @@ build/
 .env.test.local
 .env.production.local
 
+# Main-branch cloud credentials saved by start.ps1 (never commit)
+.env.main.secrets
+
 # Logs
 *.log
 npm-debug.log*
