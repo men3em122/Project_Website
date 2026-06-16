@@ -121,15 +121,15 @@ export function useDeleteImage(categoryId: string) {
 
   return useMutation({
     mutationFn: async (imageId: string) => {
-      const { data } = await api.delete<{ message: string; stats: AccuracyResponse }>(`/images/${imageId}`);
-      return { imageId, stats: data.stats };
+      await api.delete(`/images/${imageId}`);
+      return imageId;
     },
-    onSuccess: ({ imageId, stats }) => {
+    onSuccess: (deletedId) => {
       queryClient.setQueryData<AnnotatedImage[]>(imageKeys.byCategory(categoryId), (old = []) =>
-        old.filter((img) => img.id !== imageId)
+        old.filter((img) => img.id !== deletedId)
       );
-      queryClient.setQueryData<AccuracyResponse>(statsKeys.accuracy, stats);
       queryClient.invalidateQueries({ queryKey: categoryKeys.all });
+      queryClient.invalidateQueries({ queryKey: statsKeys.accuracy });
     },
   });
 }

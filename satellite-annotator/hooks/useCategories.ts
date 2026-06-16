@@ -3,7 +3,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { ApiCategory } from '@/types';
-import { statsKeys, AccuracyResponse } from './useImages';
+import { statsKeys } from './useImages';
 
 interface CategoriesResponse {
   categories: ApiCategory[];
@@ -68,14 +68,14 @@ export function useDeleteCategory() {
 
   return useMutation({
     mutationFn: async (id: string) => {
-      const { data } = await api.delete<{ message: string; stats: AccuracyResponse }>(`/categories/${id}`);
-      return { id, stats: data.stats };
+      await api.delete(`/categories/${id}`);
+      return id;
     },
-    onSuccess: ({ id, stats }) => {
+    onSuccess: (deletedId) => {
       queryClient.setQueryData<ApiCategory[]>(categoryKeys.list(), (old = []) =>
-        old.filter((c) => c.id !== id)
+        old.filter((c) => c.id !== deletedId)
       );
-      queryClient.setQueryData<AccuracyResponse>(statsKeys.accuracy, stats);
+      queryClient.invalidateQueries({ queryKey: statsKeys.accuracy });
     },
   });
 }
